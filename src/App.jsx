@@ -29,8 +29,18 @@ const App = () => {
   const [image, setImage] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // 1. Загрузка списка пород (с резервным копированием для собак и кошек)
+  // Вспомогательная функция для установки резервных пород
+  const useBackupBreeds = (type) => {
+    const backup = BACKUP_BREEDS[type];
+    setBreedsList(backup);
+    if (backup.length > 0) {
+      setSelectedBreed(backup[0].id);
+    }
+  };
+
+  // 1. Загрузка списка пород
   useEffect(() => {
+    let isMounted = true; // Защита от race conditions (быстрых кликов)
     setLoading(true);
     setImage(""); 
     setSelectedBreed(""); 
@@ -47,6 +57,8 @@ const App = () => {
         return res.json();
       })
       .then((data) => {
+        if (!isMounted) return;
+
         // Фильтруем породы, у которых есть картинки
         const validBreeds = data.filter(b => b.reference_image_id || b.image?.url);
         
@@ -54,26 +66,21 @@ const App = () => {
           setBreedsList(validBreeds);
           setSelectedBreed(validBreeds[0].id);
         } else {
-          // Если API вернуло пустой массив, включаем резервный список
-          useBackupBreeds();
+          useBackupBreeds(petType);
         }
       })
       .catch((err) => {
+        if (!isMounted) return;
         console.warn("API временно недоступно, переключаемся на резервный список пород:", err);
-        useBackupBreeds();
+        useBackupBreeds(petType);
       });
+
+    return () => {
+      isMounted = false;
+    };
   }, [petType]);
 
-  // Функция для установки резервных пород
-  const useBackupBreeds = () => {
-    const backup = BACKUP_BREEDS[petType];
-    setBreedsList(backup);
-    if (backup.length > 0) {
-      setSelectedBreed(backup[0].id);
-    }
-  };
-
-  // 2. Загрузка картинки для выбранной породы
+  // 2. Функция для загрузки конкретной картинки
   const fetchSingleImage = () => {
     if (!selectedBreed) return;
     setLoading(true);
@@ -84,17 +91,20 @@ const App = () => {
         : `https://api.thedogapi.com/v1/images/search?breed_ids=${selectedBreed}`;
 
     fetch(url)
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error("Ошибка сети при загрузке фото");
+        return res.json();
+      })
       .then((data) => {
         if (data && data.length > 0) {
           setImage(data[0].url);
         } else {
-          // Если картинок в поиске нет, пытаемся достать стандартную картинку породы
+          // Если картинок в поиске нет, пытаемся достать стандартную картинку из breedsList
           const currentBreed = breedsList.find(b => b.id === selectedBreed);
           if (currentBreed && currentBreed.image?.url) {
             setImage(currentBreed.image.url);
           } else {
-            // Если и ее нет, генерируем случайное фото этого животного в качестве заглушки
+            // Резервный запрос случайного фото
             const fallbackUrl = petType === "cat" 
               ? `https://api.thecatapi.com/v1/images/search` 
               : `https://api.thedogapi.com/v1/images/search`;
@@ -105,7 +115,8 @@ const App = () => {
                 if (fallbackData && fallbackData.length > 0) {
                   setImage(fallbackData[0].url);
                 }
-              });
+              })
+              .catch(err => console.error("Запасной запрос не удался:", err));
           }
         }
         setLoading(false);
@@ -116,14 +127,19 @@ const App = () => {
       });
   };
 
+  // Вызываем загрузку картинки только тогда, когда selectedBreed действительно существует
   useEffect(() => {
-    fetchSingleImage();
+    if (selectedBreed) {
+      fetchSingleImage();
+    }
   }, [selectedBreed]);
 
   return (
     <div className="app-container">
+      {/* Хеадер со счетчиком Azadbek */}
       <header className="app-header">
         <h1>Выбор животного 🐾</h1>
+       
       </header>
 
       <main className="app-main">
@@ -164,7 +180,7 @@ const App = () => {
 
         {/* Кнопка смены фото */}
         <div className="refresh-container">
-          <button className="btn-refresh" onClick={fetchSingleImage} disabled={loading}>
+          <button className="btn-refresh" onClick={fetchSingleImage} disabled={loading || !selectedBreed}>
             🔄 Показать другую фотографию
           </button>
         </div>
